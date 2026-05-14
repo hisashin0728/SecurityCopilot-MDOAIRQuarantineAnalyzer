@@ -1,0 +1,203 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "logicAppName": {
+      "type": "string",
+      "defaultValue": "PluginLogicApp_MDOAIRReport",
+      "metadata": {
+        "description": "Logic App リソース名"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "デプロイ先リージョン"
+      }
+    },
+    "office365ConnectionName": {
+      "type": "string",
+      "defaultValue": "office365",
+      "metadata": {
+        "description": "Office 365 API 接続の名前"
+      }
+    },
+    "emailAddress": {
+      "type": "string",
+      "metadata": {
+        "description": "レポートメールの送信先メールアドレス (CISO / SOC チーム)"
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Web/connections",
+      "apiVersion": "2016-06-01",
+      "name": "[parameters('office365ConnectionName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "displayName": "Office 365 - MDO AIR Report",
+        "api": {
+          "id": "[concat(subscription().id, '/providers/Microsoft.Web/locations/', parameters('location'), '/managedApis/office365')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[parameters('logicAppName')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/connections', parameters('office365ConnectionName'))]"
+      ],
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "$connections": {
+              "type": "Object",
+              "defaultValue": {}
+            },
+            "emailAddress": {
+              "type": "String",
+              "defaultValue": ""
+            }
+          },
+          "triggers": {
+            "manual": {
+              "type": "Request",
+              "kind": "Http",
+              "inputs": {
+                "method": "POST",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ReportHtml": {
+                      "type": "string",
+                      "description": "HTML レポート全文"
+                    }
+                  },
+                  "required": [
+                    "ReportHtml"
+                  ]
+                }
+              }
+            }
+          },
+          "actions": {
+            "Parse_JSON": {
+              "type": "ParseJson",
+              "runAfter": {},
+              "inputs": {
+                "content": "@triggerBody()",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ReportHtml": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ReportHtml"
+                  ]
+                }
+              }
+            },
+            "Send_Report_Email": {
+              "type": "ApiConnection",
+              "runAfter": {
+                "Parse_JSON": [
+                  "Succeeded"
+                ]
+              },
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['office365']['connectionId']"
+                  }
+                },
+                "method": "post",
+                "body": {
+                  "To": "@parameters('emailAddress')",
+                  "Subject": "【日次レポート】MDO AIR 隔離メール分析レポート — @{utcNow('yyyy-MM-dd')}",
+                  "Body": "<p>@{body('Parse_JSON')?['ReportHtml']}</p>",
+                  "Importance": "High",
+                  "IsHtml": true
+                },
+                "path": "/v2/Mail"
+              }
+            },
+            "Response_Success": {
+              "type": "Response",
+              "kind": "Http",
+              "runAfter": {
+                "Send_Report_Email": [
+                  "Succeeded"
+                ]
+              },
+              "inputs": {
+                "statusCode": 200,
+                "headers": {
+                  "Content-Type": "application/json"
+                },
+                "body": {
+                  "status": "success",
+                  "message": "MDO AIR レポートメールを送信しました。",
+                  "timestamp": "@{utcNow()}"
+                }
+              }
+            },
+            "Response_Failure": {
+              "type": "Response",
+              "kind": "Http",
+              "runAfter": {
+                "Send_Report_Email": [
+                  "Failed",
+                  "TimedOut"
+                ]
+              },
+              "inputs": {
+                "statusCode": 500,
+                "headers": {
+                  "Content-Type": "application/json"
+                },
+                "body": {
+                  "status": "error",
+                  "message": "MDO AIR レポートメールの送信に失敗しました。",
+                  "timestamp": "@{utcNow()}"
+                }
+              }
+            }
+          }
+        },
+        "parameters": {
+          "$connections": {
+            "value": {
+              "office365": {
+                "connectionId": "[resourceId('Microsoft.Web/connections', parameters('office365ConnectionName'))]",
+                "connectionName": "[parameters('office365ConnectionName')]",
+                "id": "[concat(subscription().id, '/providers/Microsoft.Web/locations/', parameters('location'), '/managedApis/office365')]"
+              }
+            }
+          },
+          "emailAddress": {
+            "value": "[parameters('emailAddress')]"
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "logicAppResourceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Logic/workflows', parameters('logicAppName'))]"
+    },
+    "logicAppCallbackUrl": {
+      "type": "string",
+      "value": "[listCallbackUrl(resourceId('Microsoft.Logic/workflows/triggers', parameters('logicAppName'), 'manual'), '2019-05-01').value]"
+    }
+  }
+}

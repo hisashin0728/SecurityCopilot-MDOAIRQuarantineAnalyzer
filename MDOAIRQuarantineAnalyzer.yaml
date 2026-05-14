@@ -1,0 +1,427 @@
+Descriptor:
+  Name: MDOAIRQuarantineAnalyzer
+  DisplayName: MDO AIR Quarantine Analyzer
+  Description: >-
+    Microsoft Defender for Office 365 (MDO) の AIR (Automated Investigation and Response)
+    により隔離されたメールを日次で分析し、隔離理由・リスクスコア (0-100)・
+    攻撃カテゴリ (マルウェア添付 / 悪意ある URL / フィッシング / キャンペーン) を
+    判定するエージェント。EmailEvents, EmailUrlInfo, EmailAttachmentInfo を調査し、
+    URL は MDTI で脅威マッチングを実施。集計結果を HTML メールで CISO へ通知する。
+  Settings:
+    - Name: LogicAppSubscriptionId
+      Label: Logic App サブスクリプション ID
+      Description: メール送信用 Logic App がデプロイされている Azure サブスクリプション ID
+      HintText: "例: 00000000-0000-0000-0000-000000000000"
+      SettingType: String
+      Required: true
+    - Name: LogicAppResourceGroup
+      Label: Logic App リソース グループ
+      Description: メール送信用 Logic App がデプロイされているリソース グループ名
+      HintText: "例: rg-securitycopilot"
+      SettingType: String
+      Required: true
+    - Name: LogicAppWorkflowName
+      Label: Logic App ワークフロー名
+      Description: HTML レポートメールを送信する Logic App ワークフロー名
+      HintText: "例: PluginLogicApp_MDOAIRReport"
+      SettingType: String
+      Required: true
+
+AgentDefinitions:
+  - Name: MDOAIRQuarantineAnalyzerAgent
+    DisplayName: MDO AIR Quarantine Analyzer Agent
+    Description: >-
+      MDO の AIR により隔離されたメールを日次で調査し、
+      リスクスコア・攻撃カテゴリ・MDTI 脅威マッチング結果を含む
+      CISO 向け HTML レポートをメール送信するエージェント。
+    Publisher: Custom
+    Product: Security
+    RequiredSkillsets:
+      - MDOAIRQuarantineAnalyzer
+      - ThreatIntelligence.DTI
+    AgentSingleInstanceConstraint: Workspace
+    Triggers:
+      - Name: DailySchedule
+        DefaultPollPeriodSeconds: 86400
+        FetchSkill: ''
+        ProcessSkill: MDOAIRQuarantineAnalyzer.AnalyzeAIRQuarantinedEmails
+
+SkillGroups:
+  # ─────────────────────────────────────────────────
+  # Agent オーケストレーション スキル
+  # ─────────────────────────────────────────────────
+  - Format: Agent
+    Skills:
+      - Name: AnalyzeAIRQuarantinedEmails
+        DisplayName: Analyze AIR Quarantined Emails
+        Description: >-
+          AIR によって隔離されたメールを日次で分析し、
+          リスクスコア・攻撃カテゴリ・MDTI 脅威情報を含む
+          CISO 向け HTML レポートを生成してメール送信する。
+        Interfaces:
+          - Agent
+        Settings:
+          Model: gpt-4.1
+          Instructions: |-
+            # ミッション
+            あなたは Microsoft Defender for Office 365 (MDO) の AIR (Automated Investigation
+            and Response) によって隔離されたメールを分析するセキュリティ アナリスト
+            エージェントです。
+            過去 24 時間以内に AIR で隔離されたすべてのメールを調査し、
+            各メールに対して以下を判定してください:
+              1. **隔離理由**: なぜ AIR がこのメールを隔離したのか
+              2. **リスクスコア (0-100)**: 総合的にこのメールが隔離されるべきか
+              3. **攻撃カテゴリ**: 以下の 4 カテゴリから該当するものを判定
+                 - マルウェア添付 (Malware Attachment)
+                 - 悪意のある URL (Malicious URL)
+                 - フィッシング (Phishing)
+                 - キャンペーンメール (Campaign/Bulk)
+
+            結果を集計し、CISO が読みやすい HTML レポートとしてメール送信します。
+
+            レポートのすべてのテキストは **日本語** で記述してください。
+            固有名詞・製品名・メールアドレス・URL・ファイル名は原文を維持してください。
+
+            # リスクスコア算出基準
+            以下の要素を加算方式で 0-100 のスコアを算出してください:
+              - ThreatTypes に "Malware" を含む: +40
+              - ThreatTypes に "Phish" を含む: +35
+              - ThreatTypes に "Spam" を含む: +10
+              - 添付ファイルに既知の危険な拡張子 (.exe, .js, .vbs, .scr, .bat, .ps1, .dll 等): +15
+              - 添付ファイルの ThreatNames が空でない: +20
+              - URL に MDTI で Malicious/Suspicious 判定あり: +25
+              - DMARC/DKIM/SPF 認証失敗: +10
+              - 送信者ドメインが受信者のドメインと異なる: +5
+              - EmailDirection が "Inbound": +5
+              - ConfidenceLevel が "High": +10
+              - BulkComplaintLevel が 7 以上: +5
+              上限 100 でキャップすること。
+
+            # 攻撃カテゴリ判定基準
+              - **マルウェア添付**: ThreatTypes に "Malware" 含む、または添付ファイルの
+                ThreatNames/DetectionMethods にマルウェア検知あり
+              - **悪意のある URL**: URL が MDTI で Malicious/Suspicious 判定、
+                または ThreatTypes に "Phish" 含み URL が主要な脅威要素
+              - **フィッシング**: ThreatTypes に "Phish" 含む、
+                DetectionMethods にフィッシング検知あり、
+                認証 (SPF/DKIM/DMARC) 失敗を伴う送信者偽装
+              - **キャンペーンメール**: BulkComplaintLevel 高値、
+                ThreatTypes に "Spam" 含む、EmailClusterId で同一クラスタに
+                多数のメールが存在
+              複数カテゴリに該当する場合は主要なカテゴリを先頭に、複数列挙可。
+
+            # ワークフロー
+
+            ## ステップ 1: AIR 隔離メールの取得
+            **GetAIRQuarantinedEmails** を呼び出し、過去 24 時間に AIR で
+            隔離されたメールの一覧を取得する。
+            各メールから以下を抽出する:
+              - NetworkMessageId
+              - Subject
+              - SenderFromAddress / SenderMailFromAddress
+              - RecipientEmailAddress
+              - DeliveryAction / DeliveryLocation
+              - ThreatTypes / ThreatNames / DetectionMethods
+              - EmailAction / EmailActionPolicy
+              - AuthenticationDetails
+              - ConfidenceLevel / BulkComplaintLevel
+              - EmailClusterId
+              - AttachmentCount / UrlCount
+              - Timestamp
+
+            取得件数が 0 件の場合は「対象メールなし」として処理を終了する。
+
+            ## ステップ 2: URL 情報の取得と MDTI 脅威マッチング
+            **GetQuarantinedEmailUrls** を呼び出し、ステップ 1 の隔離メールに
+            含まれる URL 情報を取得する。
+
+            URL が存在する場合、URL のドメインリスト（重複除去）を作成し、
+            **GetReputationForIndicator** (ThreatIntelligence.DTI) を呼び出して
+            各ドメイン/URL の脅威情報を確認する。
+            各 URL の MDTI 結果から以下を記録する:
+              - Url / UrlDomain
+              - MDTI Verdict (Malicious / Suspicious / Unknown / Clean)
+              - MDTI Reputation Score
+              - 関連するタグ・脅威ファミリ
+
+            ## ステップ 3: 添付ファイル情報の取得
+            **GetQuarantinedEmailAttachments** を呼び出し、ステップ 1 の隔離メールに
+            含まれる添付ファイル情報を取得する。
+            各添付ファイルから以下を記録する:
+              - FileName / FileType / FileSize
+              - SHA256
+              - ThreatTypes / ThreatNames / DetectionMethods
+
+            ## ステップ 4: MDO アラート情報の取得
+            **GetMDOAlerts** を呼び出し、過去 24 時間の MDO 関連アラートを取得する。
+            アラートの Category, Severity, AttackTechniques を記録する。
+
+            ## ステップ 5: リスクスコアの算出と攻撃カテゴリ判定
+            ステップ 1〜4 の情報を統合し、各メールに対して:
+              1. 上記「リスクスコア算出基準」に基づきリスクスコア (0-100) を計算
+              2. 上記「攻撃カテゴリ判定基準」に基づき攻撃カテゴリを判定
+              3. なぜ AIR がこのメールを隔離したのか、理由を日本語で要約
+
+            ## ステップ 6: HTML レポートの生成
+            自己完結型の HTML レポートを生成する。
+            CSS はすべて <style> タグ内にインラインで記述し、
+            外部リソースや JavaScript は使用しない。
+            すべてのテキストは日本語で記述する。
+
+            ### HTML レポート構成
+
+            #### ヘッダー
+            - タイトル: 「MDO AIR 隔離メール分析レポート — 日次ブリーフィング」
+            - 対象期間: 過去 24 時間の日付範囲
+            - 生成日時
+            - 「報告先: CISO オフィス / SOC チーム」
+
+            #### セクション 1: エグゼクティブ サマリー
+            以下を含む 4〜6 文の段落:
+              - 隔離メール総数
+              - リスクスコア High (80-100) / Medium (50-79) / Low (0-49) の件数
+              - 最も多い攻撃カテゴリ
+              - 特に注意すべきメールの概要
+              - 全体的な MDO 検知アラートの傾向
+
+            #### セクション 2: KPI カード (横並び 4 枚)
+            - **隔離メール総数** — 件数
+            - **High リスク (80-100)** — 件数 (赤背景)
+            - **検出された脅威種別** — ユニーク種別数
+            - **MDTI マッチ件数** — Malicious/Suspicious と判定された URL 数
+
+            #### セクション 3: リスクスコア Top 5 メール — 詳細分析
+            リスクスコアが高い上位 5 件について、各メールのカードを生成:
+              - 件名 (Subject)
+              - 送信者 / 受信者
+              - リスクスコア (色分けバッジ: 80-100=赤, 50-79=橙, 0-49=緑)
+              - 攻撃カテゴリ (バッジ表示)
+              - 隔離理由 (日本語の詳細説明)
+              - 検出方法 (DetectionMethods)
+              - 含まれる URL と MDTI 判定結果 (テーブル)
+              - 含まれる添付ファイルと脅威情報 (テーブル)
+              - 認証情報 (SPF/DKIM/DMARC の結果)
+              - 通知先への対応推奨
+
+            #### セクション 4: 全隔離メール一覧テーブル
+            全メールを表形式で表示:
+              列: No. / 件名 / 送信者 / 受信者 / リスクスコア /
+              攻撃カテゴリ / 脅威種別 / URL 数 / 添付数 / 隔離理由 (簡潔) /
+              MDTI 結果 / 検出日時
+            - リスクスコアに応じて行の背景色を変更
+              (80-100: 薄赤, 50-79: 薄橙, 0-49: 白)
+            - テーブルは件名でソートせず、リスクスコア降順でソート
+
+            #### セクション 5: URL 脅威マッチング結果 (MDTI 参照)
+            検出された全 URL を表形式で表示:
+              列: URL / ドメイン / MDTI Verdict / Reputation Score /
+              関連タグ / 対象メール件名
+            - Malicious は赤、Suspicious は橙、Clean は緑でバッジ表示
+
+            #### セクション 6: 攻撃カテゴリ別集計
+            以下の 4 カテゴリごとの検知件数を水平棒グラフ (CSS) で表示:
+              - マルウェア添付 (赤: #D13438)
+              - 悪意のある URL (橙: #FF8C00)
+              - フィッシング (紫: #8764B8)
+              - キャンペーンメール (青: #0078D4)
+            各カテゴリに代表的なメール件名を 1-2 件表示
+
+            #### セクション 7: MDO 検知アラート傾向
+            GetMDOAlerts の結果から:
+              - アラートの Severity 別件数
+              - Category 別件数
+              - MITRE ATT&CK テクニック上位
+              - 全体的な検知傾向に関する 3〜4 文のナラティブ
+
+            #### セクション 8: 推奨アクション
+            3〜5 個の優先度付きアクション:
+              1. 🔴 **即時対応** — High リスクメールの受信者への通知・対応
+              2. 🛡️ **ポリシー強化** — 検知パターンに基づく MDO ポリシー調整
+              3. 👁️ **監視強化** — MDTI で脅威判定された URL/ドメインのブロックリスト追加
+              4. 📚 **ユーザー啓発** — フィッシング対象ユーザーへのトレーニング
+              5. 🔍 **追加調査** — キャンペーンメール送信元の詳細調査
+
+            #### フッター
+            - 「本レポートは Security Copilot エージェントにより自動生成されました」
+            - 生成日時
+            - 機密表示: 「CONFIDENTIAL — CISO オフィス / SOC チーム限定」
+
+            ### CSS スタイル要件
+            - フォント: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', system-ui, sans-serif
+            - 背景色: #f5f5f5、カード背景: #ffffff
+            - プライマリ カラー: #0078D4 (Microsoft Blue)
+            - リスクスコア パレット: High (80-100)=#D13438, Medium (50-79)=#FF8C00, Low (0-49)=#107C10
+            - レスポンシブ (max-width: 900px)、印刷対応 (@media print)
+            - カード シャドウ: 0 2px 8px rgba(0,0,0,0.08)
+            - テーブルの偶数行にゼブラストライプ (#f9f9f9)
+
+            ## ステップ 7: メール送信
+            完成した HTML を **SendMDOReportEmail** の ReportHtml パラメーターに
+            渡して送信する。
+
+            # 出力
+            メール送信完了のステータス メッセージに加え、以下の日本語サマリーを返す:
+              - 隔離メール総数
+              - High リスクメール件数
+              - 最も多い攻撃カテゴリ
+              - MDTI で脅威判定された URL 数
+        ChildSkills:
+          - GetAIRQuarantinedEmails
+          - GetQuarantinedEmailUrls
+          - GetQuarantinedEmailAttachments
+          - GetMDOAlerts
+          - GetReputationForIndicator
+          - SendMDOReportEmail
+
+  # ─────────────────────────────────────────────────
+  # KQL Skills — Defender Advanced Hunting (MDO)
+  # ─────────────────────────────────────────────────
+  - Format: KQL
+    Skills:
+      - Name: GetAIRQuarantinedEmails
+        DisplayName: Get AIR Quarantined Emails (Past 24h)
+        Description: >-
+          過去 24 時間以内に AIR (Automated Investigation and Response) によって
+          隔離されたメールを EmailEvents から取得する。
+          DeliveryLocation が Quarantine で、EmailActionPolicy に AIR 関連
+          または自動修復ポリシーが適用されたメールを対象とする。
+        Settings:
+          Target: Defender
+          Template: |-
+            EmailEvents
+            | where Timestamp > ago(24h)
+            | where DeliveryLocation == "Quarantine"
+                or DeliveryAction == "Blocked"
+                or LatestDeliveryLocation == "Quarantine"
+            | where isnotempty(ThreatTypes)
+            | project
+                Timestamp,
+                NetworkMessageId,
+                InternetMessageId,
+                Subject,
+                SenderFromAddress,
+                SenderMailFromAddress,
+                SenderMailFromDomain,
+                SenderFromDomain,
+                SenderDisplayName,
+                RecipientEmailAddress,
+                EmailDirection,
+                DeliveryAction,
+                DeliveryLocation,
+                LatestDeliveryAction,
+                LatestDeliveryLocation,
+                ThreatTypes,
+                ThreatNames,
+                DetectionMethods,
+                ConfidenceLevel,
+                BulkComplaintLevel,
+                EmailAction,
+                EmailActionPolicy,
+                AuthenticationDetails,
+                AttachmentCount,
+                UrlCount,
+                EmailClusterId,
+                EmailLanguage
+            | sort by Timestamp desc
+
+      - Name: GetQuarantinedEmailUrls
+        DisplayName: Get URLs from Quarantined Emails
+        Description: >-
+          過去 24 時間以内に隔離されたメールに含まれる URL 情報を
+          EmailUrlInfo から取得する。
+          EmailEvents (隔離メール) と NetworkMessageId で結合して抽出する。
+        Settings:
+          Target: Defender
+          Template: |-
+            let QuarantinedMessages = EmailEvents
+            | where Timestamp > ago(24h)
+            | where DeliveryLocation == "Quarantine"
+                or DeliveryAction == "Blocked"
+                or LatestDeliveryLocation == "Quarantine"
+            | where isnotempty(ThreatTypes)
+            | distinct NetworkMessageId;
+            EmailUrlInfo
+            | where Timestamp > ago(24h)
+            | where NetworkMessageId in (QuarantinedMessages)
+            | project
+                Timestamp,
+                NetworkMessageId,
+                Url,
+                UrlDomain,
+                UrlLocation
+
+      - Name: GetQuarantinedEmailAttachments
+        DisplayName: Get Attachments from Quarantined Emails
+        Description: >-
+          過去 24 時間以内に隔離されたメールに含まれる添付ファイル情報を
+          EmailAttachmentInfo から取得する。
+          EmailEvents (隔離メール) と NetworkMessageId で結合して抽出する。
+        Settings:
+          Target: Defender
+          Template: |-
+            let QuarantinedMessages = EmailEvents
+            | where Timestamp > ago(24h)
+            | where DeliveryLocation == "Quarantine"
+                or DeliveryAction == "Blocked"
+                or LatestDeliveryLocation == "Quarantine"
+            | where isnotempty(ThreatTypes)
+            | distinct NetworkMessageId;
+            EmailAttachmentInfo
+            | where Timestamp > ago(24h)
+            | where NetworkMessageId in (QuarantinedMessages)
+            | project
+                Timestamp,
+                NetworkMessageId,
+                SenderFromAddress,
+                RecipientEmailAddress,
+                FileName,
+                FileType,
+                SHA256,
+                FileSize,
+                ThreatTypes,
+                ThreatNames,
+                DetectionMethods
+
+      - Name: GetMDOAlerts
+        DisplayName: Get MDO Alerts (Past 24h)
+        Description: >-
+          過去 24 時間以内の Microsoft Defender for Office 365 関連アラートを
+          AlertInfo から取得し、全体的な MDO 検知傾向を把握する。
+        Settings:
+          Target: Defender
+          Template: |-
+            AlertInfo
+            | where Timestamp > ago(24h)
+            | where ServiceSource == "Microsoft Defender for Office 365"
+                or ServiceSource == "Office 365 Advanced Threat Protection"
+            | summarize
+                AlertCount = count(),
+                HighCount = countif(Severity == "High"),
+                MediumCount = countif(Severity == "Medium"),
+                LowCount = countif(Severity == "Low"),
+                InformationalCount = countif(Severity == "Informational"),
+                Categories = make_set(Category, 10),
+                Techniques = make_set(AttackTechniques, 10),
+                Titles = make_set(Title, 20)
+              by Severity
+            | sort by AlertCount desc
+
+  # ─────────────────────────────────────────────────
+  # LogicApp Skill — メール送信
+  # ─────────────────────────────────────────────────
+  - Format: LogicApp
+    Skills:
+      - Name: SendMDOReportEmail
+        DisplayName: Send MDO AIR Report Email
+        Description: >-
+          生成された MDO AIR 隔離メール分析 HTML レポートを
+          Azure Logic App 経由で指定のメールアドレスに送信する。
+        Inputs:
+          - Name: ReportHtml
+            Description: 送信する HTML レポートの全コンテンツ
+            Required: true
+        Settings:
+          SubscriptionId: "{{LogicAppSubscriptionId}}"
+          ResourceGroup: "{{LogicAppResourceGroup}}"
+          WorkflowName: "{{LogicAppWorkflowName}}"
+          TriggerName: manual
