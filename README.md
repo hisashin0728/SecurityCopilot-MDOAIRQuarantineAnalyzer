@@ -72,6 +72,20 @@ Microsoft Defender for Office 365 (MDO) の **AIR (Automated Investigation and R
 7. **MDO 検知アラート傾向** — Severity/Category 別分析
 8. **推奨アクション** — 優先度付きの対応アクション
 
+## レポートメール サンプル
+
+エージェントが生成する HTML メールのイメージです。
+
+<!-- スクリーンショットを images/ フォルダに配置し、以下のパスを更新してください -->
+| セクション | スクリーンショット |
+|-----------|-------------------|
+| エグゼクティブ サマリー & KPI カード | ![Executive Summary](images/report_summary.png) |
+| Top 5 高リスクメール詳細 | ![Top 5 High Risk](images/report_top5.png) |
+| 全隔離メール一覧 & URL 脅威マッチング | ![Email List](images/report_table.png) |
+| 攻撃カテゴリ別集計 & 推奨アクション | ![Category & Actions](images/report_category.png) |
+
+> **Note**: `images/` フォルダにスクリーンショット画像を配置してください。
+
 ## デプロイ手順
 
 ### 1. Logic App のデプロイ
