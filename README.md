@@ -133,3 +133,13 @@ az deployment group create \
 | `MDOAIRQuarantineAnalyzer_LogicApp_ARM.json` | Logic App ARM テンプレート |
 | `MDOAIRQuarantineAnalyzer_card.html` | プラグイン カード (ビジュアル サマリー) |
 | `README.md` | 本ドキュメント |
+
+---
+
+## 版歴（Change Log）
+
+| バージョン | 日付 | 変更内容 |
+|---|---|---|
+| **v1.0.0** | 2026-05-14 | 初版リリース。AIR 隔離メール分析エージェント（KQL 4 スキル + MDTI 連携 + Logic App メール送信） |
+| **v1.0.1** | 2026-05-14 | README にレポートメール スクリーンショット セクションを追加、画像ファイルを配置 |
+| **v1.1.0** | 2026-06-02 | KQL スキルに `take` 制限を追加（GetAIRQuarantinedEmails: 30件、GetQuarantinedEmailUrls: 50件、GetQuarantinedEmailAttachments: 50件）。`OutOfMemoryException` 対策 |

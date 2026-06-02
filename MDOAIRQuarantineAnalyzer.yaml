@@ -323,6 +323,7 @@ SkillGroups:
                 EmailClusterId,
                 EmailLanguage
             | sort by Timestamp desc
+            | take 30
 
       - Name: GetQuarantinedEmailUrls
         DisplayName: Get URLs from Quarantined Emails
@@ -349,6 +350,7 @@ SkillGroups:
                 Url,
                 UrlDomain,
                 UrlLocation
+            | take 50
 
       - Name: GetQuarantinedEmailAttachments
         DisplayName: Get Attachments from Quarantined Emails
@@ -381,6 +383,7 @@ SkillGroups:
                 ThreatTypes,
                 ThreatNames,
                 DetectionMethods
+            | take 50
 
       - Name: GetMDOAlerts
         DisplayName: Get MDO Alerts (Past 24h)
